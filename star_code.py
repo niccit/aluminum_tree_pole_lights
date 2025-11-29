@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: MIT
-
 import alarm
 from alarm import time
 import time
 import board
 import random
-import digitalio
 import neopixel
 import analogio
 from rainbowio import colorwheel
@@ -24,25 +22,6 @@ OFF = 0X000000
 # --- CP Blue LEDs --- #
 pixels = neopixel.NeoPixel(board.NEOPIXEL, 10)
 
-# --- Speaker --- #
-# try:
-#     from audioio import AudioOut
-# except ImportError:
-#     try:
-#         from audiopwmio import PWMAudioOut as AudioOut
-#     except ImportError:
-#         pass  # not always supported by every board!
-
-# speaker_enable = digitalio.DigitalInOut(board.SPEAKER_ENABLE)
-
-# audio = AudioOut(board.SPEAKER)
-
-# --- For Wave File playback --- #
-try:
-    from audiocore import WaveFile
-except ImportError:
-    from audioio import WaveFile
-
 # --- Light Sensor --- #
 
 light_sensor = analogio.AnalogIn(board.LIGHT)
@@ -59,15 +38,15 @@ PIXEL_BRIGHTNESS = data["pixel_brightness"]
 LL_PRINT_ITERATION_ON = data["ll_print_iteration_on"]
 LL_PRINT_ITERATION_OFF = data["ll_print_iteration_off"]
 MIDDAY_SLEEP_TIME = data["midday_sleep_time"]
+STOP_TIME = data["stop_time"]
+NIGHT_SLEEP_TIME = data["night_sleep_time"]
 
 # --- Variables --- #
 COLOR_ARRAY = [RED, GREEN, BLUE, PINK, YELLOW, ORANGE, PURPLE]
 WORKING_COLOR_ARRAY = []
 WORKING_ARRAY_LENGTH = (len(WORKING_COLOR_ARRAY))
-SONG = "/music/heatmiser_short.wav"
 
 # --- Modules for the light shows --- #
-
 
 # Recreate the global working array of colors
 def rebuild_color_array():
@@ -100,14 +79,13 @@ def get_random_color():
 
     return color
 
-
 # Cycle odd/even colors as provided, loop through three times
 # Takes two specific colors unless the rand value is True
 def color_cycles(color1, color2, rand=False):
     loop = 0
 
     while loop <= 2:
-        if rand is True:
+        if rand:
             color1 = get_random_color()
             color2 = get_random_color()
             rebuild_color_array()
@@ -128,7 +106,7 @@ def color_cycles(color1, color2, rand=False):
 def color_blink(color1, color2, color3, rand=False):
     blink_counter = 0
     while blink_counter <= 1:
-        if rand is True:
+        if rand:
             color1 = get_random_color()
             color2 = get_random_color()
             color3 = get_random_color()
@@ -166,21 +144,6 @@ def twinkle_lights(loop_count):
     pixels.fill(OFF)
     rebuild_color_array()
     time.sleep(1)
-
-
-# Play Christmas song
-# Turn on speaker then turn it off to save power
-def play_song():
-    speaker_enable.direction = digitalio.Direction.OUTPUT
-    speaker_enable.value = True
-    wave_file = open(SONG, "rb")
-    with WaveFile(wave_file) as wave:
-        audio.play(wave)
-        while audio.playing:
-            pass
-    time.sleep(0.1)
-    speaker_enable.value = False
-
 
 # Use rainbowio for some additional cool effects
 def rainbow_cycle(wait):
@@ -253,41 +216,44 @@ rebuild_color_array()
 # This is used to determine if we use hand-picked or random colors
 counter = 0
 
-# If set to true, we play our song
-play_music = data["play_music"]
-
 # Set to true to start the light show
 lights_on = False
 
-# light level counter for logging and testing
-ll_counter = 0
+# Mark the point with time.monotonic() that lights start running
+start_time = 0
 
+print("starting up!")
+print(f"light sensor value is {light_sensor.value}")
 while True:
 
-    if light_sensor.value <= LIGHT_THRESHOLD or LIGHT_THRESHOLD == 0:
-        print("light sensor value meets threshold")
-        if lights_on is False:
-            if play_music is True:
-                play_song()
-                play_music = False
+    if not lights_on:
+        # If the light threshold is low enough, close to sunset, turn on
+        if light_sensor.value <= LIGHT_THRESHOLD or LIGHT_THRESHOLD == 0:
+            print(f"light sensor value meets threshold {LIGHT_THRESHOLD}")
             lights_on = True
-    else:
-        print("light sensor value does not meet threshold")
-        lights_on = False
-        play_music = data["play_music"]
+            play_light_show(counter)
+            counter += 1
+            start_time = time.monotonic()
 
-    if lights_on is True:
-        play_light_show(counter)
-        time.sleep(0.1)
-        counter += 1
+    if lights_on:
+        if LIGHT_THRESHOLD != 0:
+            print(f"light sensor value is {light_sensor.value}")
+            # It's morning and time to shut off until sunset-ish
+            if light_sensor.value > LIGHT_THRESHOLD:
+                print(f"{light_sensor.value} > {LIGHT_THRESHOLD}")
+                print(f"{light_sensor.value} it's too bright, sleeping")
+                counter = 0
+                lights_on = False
+                sleep_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + MIDDAY_SLEEP_TIME)
+                alarm.exit_and_deep_sleep_until_alarms(sleep_alarm)
 
-    if lights_on is False:
-        if MIDDAY_SLEEP_TIME != 0:
-            sleep_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + MIDDAY_SLEEP_TIME)
-            alarm.exit_and_deep_sleep_until_alarms(sleep_alarm)
-    else:
-        if ll_counter % LL_PRINT_ITERATION_ON == 0:
-            print(ll_counter, "light level is", light_sensor.value)
-            time.sleep(0.1)
+            # Sleep for designated time; usually this is overnight
+            if time.monotonic() >= start_time + STOP_TIME:
+                print(f"{time.monotonic()} is greater than {start_time + STOP_TIME} well it's time to stop sparkling, for now")
+                counter = 0
+                lights_on = False
+                sleep_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + NIGHT_SLEEP_TIME)
+                alarm.exit_and_deep_sleep_until_alarms(sleep_alarm)
 
-    ll_counter += 1
+
+    time.sleep(0.1)
